@@ -110,9 +110,10 @@ Delay in seconds to allow login page to load.\
 ### Zoom Level
 
 Level of zoom with `100` being 100%.\
-The configured zoom is enforced: if the page drifts from it (e.g., after
-Ctrl+Scroll, which Luakit honors even in passthrough mode), it is restored
-within 60 seconds and the change is logged.\
+The configured zoom is enforced: if the page ends up at a different zoom
+(WebKit can reset it to 100% after a page load; Ctrl+Scroll also zooms), it
+is restored within seconds of a page load, or within 60 seconds otherwise,
+and the change is logged.\
 (Default: 100%)
 
 ### Browser Refresh

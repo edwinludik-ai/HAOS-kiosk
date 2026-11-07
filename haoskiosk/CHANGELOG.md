@@ -2,11 +2,13 @@
 
 ## v1.3.4 - November 2026
 
-- Enforce the configured zoom level. The zoom could drift without any page
-  reload (e.g., Luakit's Ctrl+Scroll zoom binding stays active in
-  passthrough mode) and previously only a browser refresh restored it, so it
-  stayed wrong with `browser_refresh: 0`. Now the rendered zoom is checked
-  every 60s and after each page load, and restored if it differs
+- Enforce the configured zoom level. On HAOS, WebKitGTK was seen resetting
+  the zoom to 100% a fraction of a second after Luakit applied it on page
+  load, so after a load/reload the dashboard was at the configured zoom or at
+  100% depending on timing (Luakit's Ctrl+Scroll zoom binding, active even in
+  passthrough mode, can also change it). Only another reload could fix it, so
+  it stayed wrong with `browser_refresh: 0`. Now the rendered zoom is checked
+  2s after each page load and every 60s, and restored if it differs
 - Log every zoom change together with the Luakit code that made it
 
 ## v1.3.3 - November 2026

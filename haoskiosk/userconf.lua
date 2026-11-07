@@ -223,9 +223,11 @@ webview.add_signal("init", function(view)
 end)
 
 -- Keep the page at the configured zoom level.
--- The zoom can drift without any reload: e.g. luakit's <Control-Scroll> zoom binding stays active
--- even in 'passthrough' mode, and WebKit can lose the zoom after a web process change. Previously
--- only a browser_refresh reload put it back. So:
+-- The zoom can end up at 100% even though luakit applied it: on HAOS (luakit 2.3.6, WebKitGTK ~2.48)
+-- WebKit was seen resetting zoom-level to 1.0 a fraction of a second after luakit set it on page
+-- commit, so after a load/reload it was 140% or 100% depending on timing. luakit's <Control-Scroll>
+-- zoom binding also stays active in 'passthrough' mode. Previously only another reload could fix it,
+-- so with browser_refresh = 0 it stayed wrong. So:
 --   - Log every settled zoom change, with the luakit code that made it (if any)
 --   - Every ZOOM_CHECK_INTERVAL seconds, and shortly after each page load, measure the zoom the page
 --     is actually rendered at (outerWidth/innerWidth) and restore the configured zoom if it differs
