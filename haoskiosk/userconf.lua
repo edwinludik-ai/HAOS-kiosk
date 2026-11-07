@@ -1,9 +1,9 @@
 --[=[
 Add-on: HAOS Kiosk Display (haoskiosk)
 File: userconf.lua for HA minimal browser run on server
-Version: 1.3.2
+Version: 1.3.3
 Copyright Jeff Kosowsky
-Date: April 2026
+Date: November 2026
 
 Code does the following:
     - Sets browser window to fullscreen
@@ -25,6 +25,9 @@ Code does the following:
             Also, every HARD_RELOAD_FREQ refreshes, we also fully refresh the cash
       NOTE: this is important since console messages overwrite dashboards
     - Kill current luakit and restart if any page fails to reload MAX_LOAD_FAILURES in a row
+    - Auto-reload page (with backoff) if the WebKit web process crashes, instead of leaving the
+      'Web process crashed' error page up until the next refresh
+    - Disable WebKit hardware acceleration (GPU compositing) unless $HARDWARE_ACCELERATION is true
     - Allows for configurable browser $ZOOM_LEVEL
     - Set theme based on $HA_THEME.
       If no theme is set (or if set to '{}' or 'Home Assistant') then the default theme is used with light or dark depending on the value of $DARK_MODE
@@ -131,6 +134,10 @@ end
 
 local onscreen_keyboard = os.getenv("ONSCREEN_KEYBOARD") == "true"
 
+-- GPU compositing is off by default: WebKitGTK's threaded compositor can abort the
+-- web process ("pure virtual method called" / SIGABRT), which leaves a "Web process crashed" page
+local hardware_acceleration = os.getenv("HARDWARE_ACCELERATION") == "true"
+
 msg.info("USERNAME=%s; URL=%s; DARK_MODE=%s; SIDEBAR=%s; THEME=%s; LOGIN_DELAY=%.1f, ZOOM_LEVEL=%d, BROWSER_REFRESH=%d,  ONSCREEN_KEYBOARD=%s",
     username, ha_url, tostring(dark_mode), sidebar, theme, login_delay, zoom_level, browser_refresh, tostring(onscreen_keyboard))
 
@@ -148,6 +155,13 @@ end)
 
 -- Set zoom level for windows (default 100%)
 settings.webview.zoom_level = zoom_level
+
+-- Render without GPU compositing unless explicitly enabled
+if not hardware_acceleration then
+    settings.webview.hardware_acceleration_policy = "never"
+    settings.webview.enable_accelerated_2d_canvas = false
+    msg.info("Hardware acceleration disabled (software rendering)")
+end
 
 -- Set default new tab and window to blank page, rather than commercial luakit page
 settings.window.home_page    = "about:blank"
@@ -178,6 +192,33 @@ end
 -- -----------------------------------------------------------------------
 -- Per-view weak table to track last URL for refresh debugging/reset detection
 local consecutive_load_failures = setmetatable({}, { __mode = "k" })  -- Weak keys per view to count consecutive reload failures
+
+-- Auto-recover from web-process crashes instead of leaving luakit's
+-- "Web process crashed" page up until the next scheduled refresh.
+-- Backs off (3s, 6s, 12s ... up to 5 min) if crashes repeat within 15 minutes.
+local crash_times = setmetatable({}, { __mode = "k" })
+webview.add_signal("init", function(view)
+    view:add_signal("crashed", function(v)
+        local now = os.time()
+        local recent = {}
+        for _, t in ipairs(crash_times[v] or {}) do
+            if now - t < 900 then recent[#recent + 1] = t end
+        end
+        recent[#recent + 1] = now
+        crash_times[v] = recent
+        local delay = math.floor(math.min(3 * 2 ^ (#recent - 1), 300))
+        msg.warn("Web process CRASHED (%d in last 15 min); reloading in %ds: %s", #recent, delay, v.uri or "unknown")
+        local t = timer { interval = delay * 1000 }
+        t:add_signal("timeout", function()
+            t:stop()
+            if v.is_alive then
+                msg.info("Reloading after web process crash: %s", v.uri or "unknown")
+                v:reload()
+            end
+        end)
+        t:start()
+    end)
+end)
 
 -- -----------------------------------------------------------------------
 

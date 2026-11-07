@@ -119,6 +119,17 @@ Recommended because with the default RPi config, console errors *may*
 overwrite the dashboard.\
 (Default: 600 seconds)
 
+### Hardware Acceleration
+
+Use GPU compositing (hardware acceleration) in the Luakit/WebKitGTK browser.\
+Off by default because WebKitGTK's threaded compositor can abort the web
+process (`pure virtual method called`, SIGABRT), which leaves Luakit's
+"Web process crashed" page on screen. Turn on only if the dashboard feels
+sluggish with software rendering.\
+Regardless of this setting, the page is now reloaded automatically a few
+seconds after a web-process crash (backing off if crashes repeat).\
+(Default: false)
+
 ### Screen Timeout
 
 Time before screen blanks in seconds. Set to `0` to never timeout.

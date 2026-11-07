@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.3 - November 2026
+
+- Auto-reload the page when the WebKit web process crashes, instead of
+  leaving Luakit's "Web process crashed" page on screen until the next
+  browser refresh (retries after 3s, backing off up to 5 min if crashes
+  repeat within 15 min)
+- Added `hardware_acceleration` config option (default: false). With it off,
+  WebKit renders without GPU compositing, avoiding web-process aborts in
+  the threaded compositor (`pure virtual method called` / SIGABRT)
+
 ## v1.3.2 - April 2026
 
 - Added explicit BUILD_FROM location to Dockerfile for ha core 2026.04+

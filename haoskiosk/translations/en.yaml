@@ -28,6 +28,12 @@ configuration:
     description: |
       Browser refresh interval in seconds; 0 for never [Default: 600]
       Note: Recommended since on RPi, console messages can overwrite browser
+  hardware_acceleration:
+    name: "Hardware Acceleration"
+    description: |
+      Use GPU compositing in the browser [Default: false]
+      Note: Leave off unless the dashboard feels sluggish; GPU compositing in
+      WebKitGTK can crash the page renderer ("Web process crashed")
   screen_timeout:
     name: "Screen Timeout"
     description: "Time in seconds until screen blanks; 0 for never [Default: 0]"
