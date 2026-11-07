@@ -1,7 +1,7 @@
 --[=[
 Add-on: HAOS Kiosk Display (haoskiosk)
 File: userconf.lua for HA minimal browser run on server
-Version: 1.3.3
+Version: 1.3.4
 Copyright Jeff Kosowsky
 Date: November 2026
 
@@ -28,6 +28,8 @@ Code does the following:
     - Auto-reload page (with backoff) if the WebKit web process crashes, instead of leaving the
       'Web process crashed' error page up until the next refresh
     - Disable WebKit hardware acceleration (GPU compositing) unless $HARDWARE_ACCELERATION is true
+    - Keep page at configured $ZOOM_LEVEL: log zoom changes and restore the configured zoom if the
+      rendered zoom drifts (checked every 60s and after each page load)
     - Allows for configurable browser $ZOOM_LEVEL
     - Set theme based on $HA_THEME.
       If no theme is set (or if set to '{}' or 'Home Assistant') then the default theme is used with light or dark depending on the value of $DARK_MODE
@@ -218,6 +220,87 @@ webview.add_signal("init", function(view)
         end)
         t:start()
     end)
+end)
+
+-- Keep the page at the configured zoom level.
+-- The zoom can drift without any reload: e.g. luakit's <Control-Scroll> zoom binding stays active
+-- even in 'passthrough' mode, and WebKit can lose the zoom after a web process change. Previously
+-- only a browser_refresh reload put it back. So:
+--   - Log every settled zoom change, with the luakit code that made it (if any)
+--   - Every ZOOM_CHECK_INTERVAL seconds, and shortly after each page load, measure the zoom the page
+--     is actually rendered at (outerWidth/innerWidth) and restore the configured zoom if it differs
+local ZOOM_CHECK_INTERVAL = 60   -- Seconds between zoom checks
+local ZOOM_TOLERANCE = 0.03      -- Allowed difference between rendered and configured zoom factor
+local ZOOM_MEASURE_JS = "(window.innerWidth > 0 && window.outerWidth > 0) ? String(window.outerWidth / window.innerWidth) : '0'"
+local zoom_timers = setmetatable({}, { __mode = "k" })  -- Per-view periodic check timers
+local zoom_logged = setmetatable({}, { __mode = "k" })  -- Per-view last logged zoom (percent)
+
+local function pct(factor) return math.floor(factor * 100 + 0.5) end
+
+local function configured_zoom(v)
+    return (settings.get_setting_for_view(v, "webview.zoom_level") or zoom_level) / 100
+end
+
+local function zoom_change_source()  -- Luakit lib files/lines in the current call stack, if any
+    local src = {}
+    for file, line in debug.traceback():gmatch("([%w_]+%.lua):(%d+)") do
+        if file ~= "userconf.lua" and #src < 3 then src[#src + 1] = file .. ":" .. line end
+    end
+    return #src > 0 and (" via " .. table.concat(src, " < ")) or ""
+end
+
+local function check_zoom(v, reason)
+    if not v.is_alive or not v.uri or v.uri == "about:blank" then return end
+    v:eval_js(ZOOM_MEASURE_JS, { callback = function(ret, err)
+        local rendered = tonumber(ret)
+        if err or not rendered or rendered <= 0 or not v.is_alive then return end
+        local want = configured_zoom(v)
+        if math.abs(rendered - want) > ZOOM_TOLERANCE then
+            msg.warn("ZOOM DRIFT (%s): page rendered at %d%%, view zoom_level %d%%, configured %d%%; restoring",
+                     reason, pct(rendered), pct(v.zoom_level), pct(want))
+            -- Setting the same value is a no-op, so nudge first when the property already matches
+            -- (luakit itself resets to 1.0 before applying any zoom other than 1.0)
+            if math.abs(v.zoom_level - want) < 0.001 and want == 1.0 then v.zoom_level = 1.01 end
+            v.zoom_level = want
+        end
+    end })
+end
+
+webview.add_signal("init", function(view)
+    -- Log settled zoom changes (luakit briefly sets 1.0 before each change, so wait for it to settle)
+    local pending, source = nil, ""
+    view:add_signal("property::zoom_level", function(v)
+        if not pending then source = zoom_change_source() end
+        if pending then return end
+        pending = timer { interval = 250 }
+        pending:add_signal("timeout", function()
+            pending:stop(); pending = nil
+            if not v.is_alive then return end
+            local z = pct(v.zoom_level)
+            if z ~= zoom_logged[v] then
+                zoom_logged[v] = z
+                msg.info("Zoom level now %d%% (configured %d%%)%s", z, pct(configured_zoom(v)), source)
+            end
+        end)
+        pending:start()
+    end)
+
+    -- Check shortly after each page load (catches WebKit dropping the zoom after a crash)
+    view:add_signal("load-status", function(v, status)
+        if status ~= "finished" then return end
+        local t = timer { interval = 2000 }
+        t:add_signal("timeout", function() t:stop(); check_zoom(v, "after load") end)
+        t:start()
+    end)
+
+    -- Periodic check (catches drift while the page just sits there, e.g. with browser_refresh = 0)
+    local periodic = timer { interval = ZOOM_CHECK_INTERVAL * 1000 }
+    periodic:add_signal("timeout", function()
+        if view.is_alive then check_zoom(view, "periodic") else periodic:stop() end
+    end)
+    zoom_timers[view] = periodic
+    periodic:start()
+    view:add_signal("destroy", function() periodic:stop() end)
 end)
 
 -- -----------------------------------------------------------------------

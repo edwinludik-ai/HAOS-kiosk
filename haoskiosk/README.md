@@ -110,6 +110,9 @@ Delay in seconds to allow login page to load.\
 ### Zoom Level
 
 Level of zoom with `100` being 100%.\
+The configured zoom is enforced: if the page drifts from it (e.g., after
+Ctrl+Scroll, which Luakit honors even in passthrough mode), it is restored
+within 60 seconds and the change is logged.\
 (Default: 100%)
 
 ### Browser Refresh

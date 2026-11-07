@@ -3,7 +3,7 @@
 ################################################################################
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: run.sh
-# Version: 1.3.3
+# Version: 1.3.4
 # Copyright Jeff Kosowsky
 # Date: April 2026
 #

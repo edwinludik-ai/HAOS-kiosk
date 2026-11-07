@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.4 - November 2026
+
+- Enforce the configured zoom level. The zoom could drift without any page
+  reload (e.g., Luakit's Ctrl+Scroll zoom binding stays active in
+  passthrough mode) and previously only a browser refresh restored it, so it
+  stayed wrong with `browser_refresh: 0`. Now the rendered zoom is checked
+  every 60s and after each page load, and restored if it differs
+- Log every zoom change together with the Luakit code that made it
+
 ## v1.3.3 - November 2026
 
 - Auto-reload the page when the WebKit web process crashes, instead of
