@@ -446,7 +446,11 @@ if frontend_debug then
     -- file (page cache; the "active" part is counted in the add-on's memory figure but is reclaimable), shmem
     -- (shared memory and tmpfs), kernel, plus SysV shared memory segments (unattached ones are leaked)
     local function container_memory()
-        local f = io.open("/sys/fs/cgroup/memory.stat")
+        -- The container's own cgroup: "/" with a private cgroup namespace, the full path with the host's
+        local c = io.open("/proc/self/cgroup")
+        local path = c and (c:read("*a") or ""):match("0::(%S+)") or "/"
+        if c then c:close() end
+        local f = io.open("/sys/fs/cgroup" .. (path == "/" and "" or path) .. "/memory.stat")
         if not f then return "NA" end
         local st = {}
         for line in f:lines() do
