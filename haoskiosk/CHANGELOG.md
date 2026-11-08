@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.5 - November 2026
+
+- Added `frontend_debug` config option (default: false) for diagnosing
+  dashboard problems such as a blank or redrawn screen, or growing memory
+  with `browser_refresh: 0`. When on, logs (prefixed `FRONTEND:`) each page
+  load and unload, HA websocket disconnects and reconnects (with downtime),
+  and a heartbeat every 10 minutes with page uptime, DOM size, websocket
+  state, JS error count and memory (RSS) of the Luakit, WebKit and X
+  processes. A page that stops answering the heartbeat is logged too
+
 ## v1.3.4 - November 2026
 
 - Enforce the configured zoom level. On HAOS, WebKitGTK was seen resetting

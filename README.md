@@ -318,6 +318,19 @@ Manually, launch `luakit` (e.g.,
 `luakit -U localhost:8123/<your-dashboard>`) from Docker container.\
 E.g., `sudo docker exec -it addon_haoskiosk bash`
 
+### Frontend Debug Logging
+
+Log what the dashboard page is doing, to help diagnose a blank or redrawn
+screen or growing memory use. Lines start with `FRONTEND:`:
+
+- Each page load and unload (including reloads started by the page itself)
+- HA websocket disconnects, reconnects (with downtime) and failed reconnects
+- A heartbeat every 10 minutes: page uptime, DOM size, websocket state, JS
+  errors since load, and memory (RSS) of the Luakit, WebKit and X processes
+
+Has no effect in Debug mode (no browser).\
+(Default: false)
+
 ______________________________________________________________________
 
 ## REST APIs

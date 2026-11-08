@@ -140,3 +140,10 @@ configuration:
     description: |
       Launch X and Openbox but not Luakit browser. [Default: False]
       Manually access using: sudo docker -exec -it addon_haoskiosk bash
+  frontend_debug:
+    name: "Frontend Debug Logging"
+    description: |
+      Log what the dashboard page is doing: page loads and unloads, HA
+      websocket drops and reconnects, plus a heartbeat every 10 minutes with
+      DOM size and browser memory. Lines start with 'FRONTEND:'. No effect in
+      Debug Mode (no browser). [Default: False]

@@ -1,7 +1,7 @@
 --[=[
 Add-on: HAOS Kiosk Display (haoskiosk)
 File: userconf.lua for HA minimal browser run on server
-Version: 1.3.4
+Version: 1.3.5
 Copyright Jeff Kosowsky
 Date: November 2026
 
@@ -30,6 +30,8 @@ Code does the following:
     - Disable WebKit hardware acceleration (GPU compositing) unless $HARDWARE_ACCELERATION is true
     - Keep page at configured $ZOOM_LEVEL: log zoom changes and restore the configured zoom if the
       rendered zoom drifts (checked every 60s and after each page load)
+    - If $FRONTEND_DEBUG is true, log dashboard page activity (page loads/unloads, HA websocket drops and
+      reconnects) and a periodic heartbeat with DOM size and browser/X process memory
     - Allows for configurable browser $ZOOM_LEVEL
     - Set theme based on $HA_THEME.
       If no theme is set (or if set to '{}' or 'Home Assistant') then the default theme is used with light or dark depending on the value of $DARK_MODE
@@ -140,8 +142,11 @@ local onscreen_keyboard = os.getenv("ONSCREEN_KEYBOARD") == "true"
 -- web process ("pure virtual method called" / SIGABRT), which leaves a "Web process crashed" page
 local hardware_acceleration = os.getenv("HARDWARE_ACCELERATION") == "true"
 
-msg.info("USERNAME=%s; URL=%s; DARK_MODE=%s; SIDEBAR=%s; THEME=%s; LOGIN_DELAY=%.1f, ZOOM_LEVEL=%d, BROWSER_REFRESH=%d,  ONSCREEN_KEYBOARD=%s",
-    username, ha_url, tostring(dark_mode), sidebar, theme, login_delay, zoom_level, browser_refresh, tostring(onscreen_keyboard))
+-- Extra logging about the dashboard page (see "Frontend debug logging" below)
+local frontend_debug = os.getenv("FRONTEND_DEBUG") == "true"
+
+msg.info("USERNAME=%s; URL=%s; DARK_MODE=%s; SIDEBAR=%s; THEME=%s; LOGIN_DELAY=%.1f, ZOOM_LEVEL=%d, BROWSER_REFRESH=%d,  ONSCREEN_KEYBOARD=%s, FRONTEND_DEBUG=%s",
+    username, ha_url, tostring(dark_mode), sidebar, theme, login_delay, zoom_level, browser_refresh, tostring(onscreen_keyboard), tostring(frontend_debug))
 
 -- -----------------------------------------------------------------------
 -- Forward console messages to stdout
@@ -304,6 +309,137 @@ webview.add_signal("init", function(view)
     periodic:start()
     view:add_signal("destroy", function() periodic:stop() end)
 end)
+
+-- -----------------------------------------------------------------------
+-- Frontend debug logging (only if $FRONTEND_DEBUG is true)
+-- Logs what the dashboard page itself is doing, to help explain a blank or redrawn screen and memory
+-- growth. (JS errors are already in the log via the console forwarding above, so they are only counted.)
+--   - Each page load start, including reloads triggered from inside the page
+--   - Page unload (with how long the page was up) and hidden/visible changes
+--   - HA websocket disconnects, reconnects (with downtime) and failed reconnect attempts
+--   - Every FRONTEND_HEARTBEAT seconds: page uptime, DOM size (including shadow DOM), websocket state,
+--     JS errors since load, and RSS memory of the luakit, WebKit and X processes
+-- Page-side events are written with console.* (forwarded to stdout), all lines are prefixed "FRONTEND:"
+local FRONTEND_HEARTBEAT = 600  -- Seconds between heartbeat lines
+
+if frontend_debug then
+    local js_frontend_monitor = [[
+        (function() {
+            if (window.__kioskFrontendDebug) return;  // Once per page load
+            const d = window.__kioskFrontendDebug = { loaded: Date.now(), errors: 0, conn: null };
+            const log = (level, text) => console[level]('FRONTEND: ' + text);
+            const secs = (since) => Math.round((Date.now() - since) / 1000);
+
+            window.addEventListener('error', () => { d.errors++; });  // Counted only: WebKit already logs them
+            window.addEventListener('unhandledrejection', () => { d.errors++; });
+            document.addEventListener('visibilitychange', () => log('info', 'page ' + document.visibilityState));
+            window.addEventListener('pagehide', () => log('info', 'page unloading after ' + secs(d.loaded) + 's'));
+
+            // HA websocket events (window.hassConnection only exists on HA frontend pages)
+            let tries = 0;
+            (function attach() {
+                if (!window.hassConnection) {
+                    if (++tries < 10) setTimeout(attach, 1000);
+                    return;
+                }
+                window.hassConnection.then(({ conn }) => {
+                    d.conn = conn;
+                    let down = 0;
+                    conn.addEventListener('disconnected', () => { down = Date.now(); log('warn', 'HA websocket disconnected'); });
+                    conn.addEventListener('ready', () => log('info', 'HA websocket reconnected' + (down ? ' after ' + secs(down) + 's' : '')));
+                    conn.addEventListener('reconnect-error', (c, err) => log('warn', 'HA websocket reconnect failed (' + err + ')'));
+                    log('info', 'watching HA websocket (HA ' + (conn.haVersion || '?') + ')');
+                }).catch((err) => log('warn', 'HA websocket not available: ' + err));
+            })();
+        })();
+    ]]
+
+    local js_frontend_heartbeat = [[
+        (function() {
+            const d = window.__kioskFrontendDebug;
+            if (!d) return 'monitor not loaded on this page';
+            let nodes = 0;
+            const walk = (root) => {
+                const w = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+                for (let el = w.nextNode(); el; el = w.nextNode()) {
+                    nodes++;
+                    if (el.shadowRoot) walk(el.shadowRoot);
+                }
+            };
+            walk(document);
+            const up = Math.round((Date.now() - d.loaded) / 60000);
+            return 'page up ' + Math.floor(up / 60) + 'h' + String(up % 60).padStart(2, '0') + 'm, ' +
+                   nodes + ' DOM nodes, websocket ' + (d.conn ? (d.conn.connected ? 'connected' : 'DISCONNECTED') : 'n/a') +
+                   ', ' + document.visibilityState + ', ' + d.errors + ' JS errors';
+        })()
+    ]]
+
+    local function process_rss()  -- e.g. "luakit 170 MB, WebKitWebProces 312 MB, Xorg 60 MB" (summed per name)
+        local totals, names = {}, {}
+        local ls = io.popen("ls /proc 2>/dev/null")
+        if not ls then return "NA" end
+        for pid in ls:lines() do
+            if pid:match("^%d+$") then
+                local f = io.open("/proc/" .. pid .. "/comm")
+                local name = f and f:read("*l")
+                if f then f:close() end
+                if name and (name:match("^WebKit") or name == "luakit" or name == "Xorg") then
+                    local s = io.open("/proc/" .. pid .. "/status")
+                    local kb = s and tonumber((s:read("*a") or ""):match("VmRSS:%s*(%d+)"))
+                    if s then s:close() end
+                    if kb then
+                        if not totals[name] then names[#names + 1] = name; totals[name] = 0 end
+                        totals[name] = totals[name] + kb
+                    end
+                end
+            end
+        end
+        ls:close()
+        table.sort(names)
+        local parts = {}
+        for _, n in ipairs(names) do parts[#parts + 1] = string.format("%s %d MB", n, math.floor(totals[n] / 1024 + 0.5)) end
+        return #parts > 0 and table.concat(parts, ", ") or "NA"
+    end
+
+    webview.add_signal("init", function(view)
+        local pending = nil  -- Unanswered heartbeat request {id, sent} (page busy or hung)
+        local request_id = 0
+
+        view:add_signal("load-status", function(v, status)
+            if not v.uri or v.uri == "about:blank" then return end
+            if status == "provisional" then
+                pending = nil  -- An answer from the old page may never come
+                msg.info("FRONTEND: page load started: %s", v.uri)
+            elseif status == "finished" then
+                v:eval_js(js_frontend_monitor, { source = "frontend_debug.js", no_return = true })
+            end
+        end)
+
+        local heartbeat = timer { interval = FRONTEND_HEARTBEAT * 1000 }
+        heartbeat:add_signal("timeout", function()
+            if not view.is_alive then heartbeat:stop(); return end
+            if not view.uri or view.uri == "about:blank" then return end
+            if pending then  -- Don't queue more requests behind an unanswered one
+                msg.warn("FRONTEND: heartbeat: page not answering for %ds; RSS: %s", os.time() - pending.sent, process_rss())
+                return
+            end
+            request_id = request_id + 1
+            local id = request_id
+            pending = { id = id, sent = os.time() }
+            view:eval_js(js_frontend_heartbeat, { callback = function(ret, err)
+                if not pending or pending.id ~= id then return end  -- Stale: page was reloaded since
+                local late = os.time() - pending.sent
+                pending = nil
+                msg.info("FRONTEND: heartbeat: %s%s; RSS: %s", err and ("page error: " .. tostring(err)) or tostring(ret),
+                         late >= FRONTEND_HEARTBEAT and string.format(" (answered after %ds)", late) or "", process_rss())
+            end })
+        end)
+        heartbeat:start()
+        view:add_signal("destroy", function() heartbeat:stop() end)
+    end)
+
+    msg.info("Frontend debug logging enabled (heartbeat every %ds)", FRONTEND_HEARTBEAT)
+end
 
 -- -----------------------------------------------------------------------
 

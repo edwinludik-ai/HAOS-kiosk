@@ -36,6 +36,7 @@
 #         COMMAND_WHITELIST
 #         VNC_SERVER
 #         DEBUG_MODE
+#         FRONTEND_DEBUG
 #
 #     - Hack to delete (and later restore) /dev/tty0 (needed for X to start
 #       and to prevent udev permission errors))
@@ -150,6 +151,7 @@ load_config_var REST_IP "127.0.0.1"
 load_config_var REST_BEARER_TOKEN "" 1  # Mask token in log
 load_config_var COMMAND_WHITELIST "^$"  # Default is no commands allowed
 load_config_var DEBUG_MODE false
+load_config_var FRONTEND_DEBUG false  # Extra logging from the dashboard page (see userconf.lua)
 load_config_var VNC_SERVER ""  1 #Mask password in log
 
 # Validate environment variables set by config.yaml
