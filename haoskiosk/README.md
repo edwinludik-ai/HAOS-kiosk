@@ -326,7 +326,12 @@ screen or growing memory use. Lines start with `FRONTEND:`:
 - Each page load and unload (including reloads started by the page itself)
 - HA websocket disconnects, reconnects (with downtime) and failed reconnects
 - A heartbeat every 10 minutes: page uptime, DOM size, websocket state, JS
-  errors since load, and memory (RSS) of the Luakit, WebKit and X processes
+  errors since load, and memory (RSS) and CPU use (% of one core since the
+  last heartbeat) of the Luakit, WebKit and X processes
+
+Tip for slow hardware: with hardware acceleration off, every animation on
+the dashboard is drawn by the CPU. Animated icons (e.g., clock-weather-card
+`animated_icons: true`) can use a full CPU core; static icons avoid that.
 
 Has no effect in Debug mode (no browser).\
 (Default: false)

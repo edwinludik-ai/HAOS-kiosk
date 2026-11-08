@@ -1,7 +1,7 @@
 --[=[
 Add-on: HAOS Kiosk Display (haoskiosk)
 File: userconf.lua for HA minimal browser run on server
-Version: 1.3.5
+Version: 1.3.7
 Copyright Jeff Kosowsky
 Date: November 2026
 
@@ -31,7 +31,7 @@ Code does the following:
     - Keep page at configured $ZOOM_LEVEL: log zoom changes and restore the configured zoom if the
       rendered zoom drifts (checked every 60s and after each page load)
     - If $FRONTEND_DEBUG is true, log dashboard page activity (page loads/unloads, HA websocket drops and
-      reconnects) and a periodic heartbeat with DOM size and browser/X process memory
+      reconnects) and a periodic heartbeat with DOM size and browser/X process memory and CPU use
     - Allows for configurable browser $ZOOM_LEVEL
     - Set theme based on $HA_THEME.
       If no theme is set (or if set to '{}' or 'Home Assistant') then the default theme is used with light or dark depending on the value of $DARK_MODE
@@ -318,7 +318,8 @@ end)
 --   - Page unload (with how long the page was up) and hidden/visible changes
 --   - HA websocket disconnects, reconnects (with downtime) and failed reconnect attempts
 --   - Every FRONTEND_HEARTBEAT seconds: page uptime, DOM size (including shadow DOM), websocket state,
---     JS errors since load, and RSS memory of the luakit, WebKit and X processes
+--     JS errors since load, and memory (RSS) and CPU use (since the last heartbeat, % of one core) of the
+--     luakit, WebKit and X processes, with all other processes summed as "other"
 -- Page-side events are written with console.* (forwarded to stdout), all lines are prefixed "FRONTEND:"
 local FRONTEND_HEARTBEAT = 600  -- Seconds between heartbeat lines
 
@@ -374,32 +375,70 @@ if frontend_debug then
         })()
     ]]
 
-    local function process_rss()  -- e.g. "luakit 170 MB, WebKitWebProces 312 MB, Xorg 60 MB" (summed per name)
-        local totals, names = {}, {}
+    local CLK_TCK = 100  -- Kernel clock ticks per second for /proc/<pid>/stat CPU times (USER_HZ, 100 on Linux)
+    local function count_cpus()
+        local n = 0
+        local f = io.open("/proc/cpuinfo")
+        if f then
+            for line in f:lines() do if line:match("^processor%s*:") then n = n + 1 end end
+            f:close()
+        end
+        return math.max(n, 1)
+    end
+    local function uptime()  -- Seconds since boot, fractional
+        local f = io.open("/proc/uptime")
+        local t = f and tonumber((f:read("*l") or ""):match("^(%S+)"))
+        if f then f:close() end
+        return t
+    end
+
+    -- Memory (RSS) and CPU use per process name since the previous call, e.g.
+    -- "WebKitWebProcess 312 MB 9%, Xorg 60 MB 2%, luakit 170 MB 1%, other 40 MB 0%" (CPU as % of one core)
+    local process_names = { WebKitWebProces = "WebKitWebProcess", WebKitNetworkPr = "WebKitNetworkProcess",
+                            luakit = "luakit", Xorg = "Xorg" }  -- /proc comm names are cut at 15 characters
+    local last_ticks, last_uptime = {}, nil
+    local function process_stats()
+        local rss, ticks, names = {}, {}, {}
         local ls = io.popen("ls /proc 2>/dev/null")
         if not ls then return "NA" end
         for pid in ls:lines() do
             if pid:match("^%d+$") then
-                local f = io.open("/proc/" .. pid .. "/comm")
-                local name = f and f:read("*l")
+                local f = io.open("/proc/" .. pid .. "/stat")
+                local stat = f and f:read("*l")
                 if f then f:close() end
-                if name and (name:match("^WebKit") or name == "luakit" or name == "Xorg") then
+                local comm, rest = (stat or ""):match("^%d+ %((.*)%) (.*)$")
+                if comm then
+                    local name = process_names[comm] or (comm:match("^WebKit") and comm) or "other"
+                    local fields = {}
+                    for x in rest:gmatch("%S+") do fields[#fields + 1] = x end  -- fields[12], [13] = utime, stime
                     local s = io.open("/proc/" .. pid .. "/status")
-                    local kb = s and tonumber((s:read("*a") or ""):match("VmRSS:%s*(%d+)"))
+                    local kb = s and tonumber((s:read("*a") or ""):match("VmRSS:%s*(%d+)")) or 0
                     if s then s:close() end
-                    if kb then
-                        if not totals[name] then names[#names + 1] = name; totals[name] = 0 end
-                        totals[name] = totals[name] + kb
-                    end
+                    if not rss[name] then names[#names + 1] = name; rss[name] = 0; ticks[name] = 0 end
+                    rss[name] = rss[name] + kb
+                    ticks[name] = ticks[name] + (tonumber(fields[12]) or 0) + (tonumber(fields[13]) or 0)
                 end
             end
         end
         ls:close()
-        table.sort(names)
+        local now = uptime()
+        local elapsed = (now and last_uptime) and (now - last_uptime) or nil
+        table.sort(names, function(a, b)
+            if a == "other" or b == "other" then return b == "other" and a ~= "other" end
+            return a < b
+        end)
         local parts = {}
-        for _, n in ipairs(names) do parts[#parts + 1] = string.format("%s %d MB", n, math.floor(totals[n] / 1024 + 0.5)) end
+        for _, n in ipairs(names) do
+            local cpu = ""
+            if elapsed and elapsed > 0 then  -- A name new since the last call started within the interval
+                cpu = string.format(" %d%%", math.floor(math.max(0, ticks[n] - (last_ticks[n] or 0)) / CLK_TCK / elapsed * 100 + 0.5))
+            end
+            parts[#parts + 1] = string.format("%s %d MB%s", n, math.floor(rss[n] / 1024 + 0.5), cpu)
+        end
+        last_ticks, last_uptime = ticks, now
         return #parts > 0 and table.concat(parts, ", ") or "NA"
     end
+    process_stats()  -- Baseline, so the first heartbeat reports CPU use since startup
 
     webview.add_signal("init", function(view)
         local pending = nil  -- Unanswered heartbeat request {id, sent} (page busy or hung)
@@ -420,7 +459,7 @@ if frontend_debug then
             if not view.is_alive then heartbeat:stop(); return end
             if not view.uri or view.uri == "about:blank" then return end
             if pending then  -- Don't queue more requests behind an unanswered one
-                msg.warn("FRONTEND: heartbeat: page not answering for %ds; RSS: %s", os.time() - pending.sent, process_rss())
+                msg.warn("FRONTEND: heartbeat: page not answering for %ds; processes: %s", os.time() - pending.sent, process_stats())
                 return
             end
             request_id = request_id + 1
@@ -430,15 +469,16 @@ if frontend_debug then
                 if not pending or pending.id ~= id then return end  -- Stale: page was reloaded since
                 local late = os.time() - pending.sent
                 pending = nil
-                msg.info("FRONTEND: heartbeat: %s%s; RSS: %s", err and ("page error: " .. tostring(err)) or tostring(ret),
-                         late >= FRONTEND_HEARTBEAT and string.format(" (answered after %ds)", late) or "", process_rss())
+                msg.info("FRONTEND: heartbeat: %s%s; processes: %s", err and ("page error: " .. tostring(err)) or tostring(ret),
+                         late >= FRONTEND_HEARTBEAT and string.format(" (answered after %ds)", late) or "", process_stats())
             end })
         end)
         heartbeat:start()
         view:add_signal("destroy", function() heartbeat:stop() end)
     end)
 
-    msg.info("Frontend debug logging enabled (heartbeat every %ds)", FRONTEND_HEARTBEAT)
+    msg.info("Frontend debug logging enabled (heartbeat every %ds; process CPU is %% of one core, %d cores)",
+             FRONTEND_HEARTBEAT, count_cpus())
 end
 
 -- -----------------------------------------------------------------------

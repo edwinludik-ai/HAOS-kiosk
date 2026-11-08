@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.7 - November 2026
+
+- `frontend_debug` heartbeat now also logs CPU use per process since the
+  previous heartbeat (as % of one core), and sums all other processes as
+  `other`, so it shows which process uses the CPU and which one grows.
+  Example: an animated weather-icon strip (about 40 animated SVG icons)
+  kept the WebKit web process at 150% of a core with software rendering;
+  the same icons static used 0%
+
 ## v1.3.6 - November 2026
 
 - Fork only: add-on page links to the edwinludik-ai/HAOS-kiosk fork (main
