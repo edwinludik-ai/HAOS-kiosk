@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.3.6 - November 2026
+
+- Fork only: add-on page links to the edwinludik-ai/HAOS-kiosk fork
+  (fix-webprocess-crash branch) instead of upstream
+
 ## v1.3.5 - November 2026
 
 - Added `frontend_debug` config option (default: false) for diagnosing
