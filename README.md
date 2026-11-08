@@ -327,7 +327,9 @@ screen or growing memory use. Lines start with `FRONTEND:`:
 - HA websocket disconnects, reconnects (with downtime) and failed reconnects
 - A heartbeat every 10 minutes: page uptime, DOM size, websocket state, JS
   errors since load, and memory (RSS) and CPU use (% of one core since the
-  last heartbeat) of the Luakit, WebKit and X processes
+  last heartbeat) of the Luakit, WebKit and X processes, plus the
+  container's memory split (process memory, page cache, shared memory,
+  kernel)
 
 Tip for slow hardware: with hardware acceleration off, every animation on
 the dashboard is drawn by the CPU. Animated icons (e.g., clock-weather-card

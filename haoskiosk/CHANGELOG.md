@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.3.8 - November 2026
+
+- `frontend_debug`: each heartbeat also logs the container's memory split
+  from cgroup v2 (`anon`, `file` with its active part, `shmem`, `kernel`),
+  SysV shared memory segments (unattached ones are leaked) and luakit's Lua
+  heap. The add-on's memory figure in Home Assistant includes active page
+  cache, which can grow while every process's memory stays flat
+
 ## v1.3.7 - November 2026
 
 - `frontend_debug` heartbeat now also logs CPU use per process since the

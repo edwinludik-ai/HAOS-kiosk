@@ -1,7 +1,7 @@
 --[=[
 Add-on: HAOS Kiosk Display (haoskiosk)
 File: userconf.lua for HA minimal browser run on server
-Version: 1.3.7
+Version: 1.3.8
 Copyright Jeff Kosowsky
 Date: November 2026
 
@@ -320,6 +320,8 @@ end)
 --   - Every FRONTEND_HEARTBEAT seconds: page uptime, DOM size (including shadow DOM), websocket state,
 --     JS errors since load, and memory (RSS) and CPU use (since the last heartbeat, % of one core) of the
 --     luakit, WebKit and X processes, with all other processes summed as "other"
+--   - With each heartbeat, the container's memory split (process memory, page cache, shared memory, kernel,
+--     SysV shared memory segments) and luakit's Lua heap, for growth that per-process RSS does not show
 -- Page-side events are written with console.* (forwarded to stdout), all lines are prefixed "FRONTEND:"
 local FRONTEND_HEARTBEAT = 600  -- Seconds between heartbeat lines
 
@@ -440,6 +442,37 @@ if frontend_debug then
     end
     process_stats()  -- Baseline, so the first heartbeat reports CPU use since startup
 
+    -- Container-wide memory (cgroup v2), for growth that per-process RSS does not show: anon (process memory),
+    -- file (page cache; the "active" part is counted in the add-on's memory figure but is reclaimable), shmem
+    -- (shared memory and tmpfs), kernel, plus SysV shared memory segments (unattached ones are leaked)
+    local function container_memory()
+        local f = io.open("/sys/fs/cgroup/memory.stat")
+        if not f then return "NA" end
+        local st = {}
+        for line in f:lines() do
+            local k, v = line:match("^(%S+) (%d+)$")
+            if k then st[k] = tonumber(v) end
+        end
+        f:close()
+        local function mb(b) return math.floor((b or 0) / 1048576 + 0.5) end
+        local shm_count, shm_bytes, shm_unattached = 0, 0, 0
+        local s = io.open("/proc/sysvipc/shm")
+        if s then
+            s:read("*l")  -- Header
+            for line in s:lines() do
+                local fields = {}
+                for x in line:gmatch("%S+") do fields[#fields + 1] = x end  -- [4] = size, [7] = nattch
+                shm_count = shm_count + 1
+                shm_bytes = shm_bytes + (tonumber(fields[4]) or 0)
+                if fields[7] == "0" then shm_unattached = shm_unattached + 1 end
+            end
+            s:close()
+        end
+        return string.format("anon %d MB, file %d MB (active %d MB), shmem %d MB, kernel %d MB; SysV shm %d segments %d MB (%d unattached)",
+            mb(st.anon), mb(st.file), mb(st.active_file), mb(st.shmem), mb(st.kernel or st.slab),
+            shm_count, mb(shm_bytes), shm_unattached)
+    end
+
     webview.add_signal("init", function(view)
         local pending = nil  -- Unanswered heartbeat request {id, sent} (page busy or hung)
         local request_id = 0
@@ -458,6 +491,7 @@ if frontend_debug then
         heartbeat:add_signal("timeout", function()
             if not view.is_alive then heartbeat:stop(); return end
             if not view.uri or view.uri == "about:blank" then return end
+            msg.info("FRONTEND: memory: container %s; luakit Lua heap %d KB", container_memory(), math.floor(collectgarbage("count")))
             if pending then  -- Don't queue more requests behind an unanswered one
                 msg.warn("FRONTEND: heartbeat: page not answering for %ds; processes: %s", os.time() - pending.sent, process_stats())
                 return
